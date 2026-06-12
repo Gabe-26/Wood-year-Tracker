@@ -3384,22 +3384,7 @@ function runItemDetailMaterials() {
   const matCat = getMaterialCat(code);
   const matColor = getMaterialCatColor(matCat);
 
-  // Build period table
-  const tableRows = yearData.map((yd, yi) => {
-    const prevYd = yi > 0 ? yearData[yi-1] : null;
-    return `<tr>
-      <td style="font-family:'IBM Plex Mono',monospace;color:#4caf7d;font-weight:600;cursor:default;">${yd.year}</td>
-      ${yd.issued.map((v, pi) => {
-        const prev = prevYd ? prevYd.issued[pi] : null;
-        const pct = prev !== null ? calcPct(prev, v) : null;
-        const sub = (pct !== null && pct !== 0)
-          ? `<div style="font-size:9px;${pct>0?'color:var(--green)':'color:var(--red)'}">${fmtPct(pct)}</div>` : '';
-        return `<td class="td-num ${v===0?'zero':''}">${fmt(v)}${sub}</td>`;
-      }).join('')}
-      <td class="td-num" style="color:#4caf7d;font-weight:600;">${fmt(yd.total)}</td>
-    </tr>`;
-  }).join('');
-
+  // Render HTML shell — tbody holds yearData for re-render
   document.getElementById('itemDetailContent').innerHTML = `
     <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
       <div>
@@ -3415,12 +3400,12 @@ function runItemDetailMaterials() {
       <table>
         <thead>
           <tr>
-            <th>Year</th>
+            <th title="Click year to hide/show">Year</th>
             ${Array.from({length:12},(_,i)=>`<th style="text-align:right">P${i+1}</th>`).join('')}
             <th style="text-align:right">Total</th>
           </tr>
         </thead>
-        <tbody>${tableRows}</tbody>
+        <tbody id="itemMatTbody" data-yeardata='${JSON.stringify(yearData).replace(/'/g, "&#39;")}'></tbody>
       </table>
     </div>
     <div class="chart-card full" style="margin-bottom:16px;">
@@ -3433,25 +3418,11 @@ function runItemDetailMaterials() {
     </div>
   `;
 
-  // Year-over-year line chart
-  const colors = ['#c8a84b','#5b9bd5','#4caf7d','#9b7fd4','#e0885c','#4cb8b8','#e05c5c'];
-  const ctx1 = document.getElementById('itemMatChart').getContext('2d');
-  new Chart(ctx1, {
-    type: 'line',
-    data: {
-      labels: Array.from({length:12},(_,i)=>'P'+(i+1)),
-      datasets: yearData.map((yd, i) => ({
-        label: String(yd.year),
-        data: yd.issued,
-        borderColor: colors[i % colors.length],
-        backgroundColor: colors[i % colors.length] + '22',
-        borderWidth: 2, pointRadius: 3, fill: false, tension: 0.3,
-      }))
-    },
-    options: chartOpts('Qty Issued', false)
-  });
+  state.itemMatExcludedYears = [];
+  renderItemMatTable();
+  renderItemMatChart();
 
-  // Annual totals bar chart
+  // Annual totals bar chart (static — all years)
   const ctx2 = document.getElementById('itemMatTotalChart').getContext('2d');
   new Chart(ctx2, {
     type: 'bar',
@@ -3460,6 +3431,73 @@ function runItemDetailMaterials() {
       datasets: [{ label: 'Total Issued', data: yearData.map(yd => yd.total), backgroundColor: '#4caf7d99', borderColor: '#4caf7d', borderWidth: 1 }]
     },
     options: chartOpts('Total Issued', false)
+  });
+}
+
+let itemMatChart = null;
+
+function toggleItemMatYear(year) {
+  if (!state.itemMatExcludedYears) state.itemMatExcludedYears = [];
+  const idx = state.itemMatExcludedYears.indexOf(year);
+  if (idx === -1) state.itemMatExcludedYears.push(year);
+  else state.itemMatExcludedYears.splice(idx, 1);
+  renderItemMatTable();
+  renderItemMatChart();
+}
+
+function renderItemMatTable() {
+  const tbody = document.getElementById('itemMatTbody');
+  if (!tbody) return;
+  if (!state.itemMatExcludedYears) state.itemMatExcludedYears = [];
+  const allYearData = JSON.parse(tbody.dataset.yeardata);
+  tbody.innerHTML = allYearData.map((yd, yi) => {
+    const excluded = state.itemMatExcludedYears.includes(yd.year);
+    let prevYd = null;
+    for (let j = yi - 1; j >= 0; j--) {
+      if (!state.itemMatExcludedYears.includes(allYearData[j].year)) { prevYd = allYearData[j]; break; }
+    }
+    const rowStyle = excluded ? 'opacity:0.3;' : '';
+    return `<tr style="${rowStyle}">
+      <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;cursor:pointer;user-select:none;color:#4caf7d;"
+        onclick="toggleItemMatYear(${yd.year})" title="Click to toggle year">
+        ${excluded ? `<span style="text-decoration:line-through;color:var(--text3);">${yd.year}</span>` : yd.year}
+      </td>
+      ${yd.issued.map((v, pi) => {
+        const prev = prevYd ? prevYd.issued[pi] : null;
+        const pct = prev !== null ? calcPct(prev, v) : null;
+        const sub = (pct !== null && pct !== 0)
+          ? `<div style="font-size:9px;${pct>0?'color:var(--green)':'color:var(--red)'}">${fmtPct(pct)}</div>` : '';
+        return `<td class="td-num ${v===0?'zero':''}">${fmt(v)}${sub}</td>`;
+      }).join('')}
+      <td class="td-num" style="color:#4caf7d;font-weight:600;">${fmt(yd.total)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderItemMatChart() {
+  if (itemMatChart) { itemMatChart.destroy(); itemMatChart = null; }
+  const canvas = document.getElementById('itemMatChart');
+  if (!canvas) return;
+  if (!state.itemMatExcludedYears) state.itemMatExcludedYears = [];
+  const allYearData = JSON.parse(document.getElementById('itemMatTbody').dataset.yeardata);
+  const activeYearData = allYearData.filter(yd => !state.itemMatExcludedYears.includes(yd.year));
+  const colors = ['#c8a84b','#5b9bd5','#4caf7d','#9b7fd4','#e0885c','#4cb8b8','#e05c5c'];
+  const colorMap = {};
+  allYearData.forEach((yd, i) => { colorMap[yd.year] = colors[i % colors.length]; });
+
+  itemMatChart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: Array.from({length:12},(_,i)=>'P'+(i+1)),
+      datasets: activeYearData.map(yd => ({
+        label: String(yd.year),
+        data: yd.issued,
+        borderColor: colorMap[yd.year],
+        backgroundColor: colorMap[yd.year] + '22',
+        borderWidth: 2, pointRadius: 3, fill: false, tension: 0.3,
+      }))
+    },
+    options: chartOpts('Qty Issued', false)
   });
 }
 
